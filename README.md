@@ -21,7 +21,6 @@ We reverse-engineered architecture parameters for OpenAI's GPT-4o, o1, and o3-mi
 
 1. **Public Benchmarks & Behavior**: Observing latency, throughput, cost-per-token, and context-window support in the OpenAI API.
 2. **Open-Source Analogs**: Mapping to models like Mixtral (22B MoE), LLaMA-2 (70B dense), and Mistral-7B for proxy sizing.
-3. **Scaling Laws**: Applying Kaplan et al. and Chinchilla/Hoffmann guidelines to infer hidden dimensions and layer counts.
 
 ```python
 MODEL_PROFILES = {
@@ -52,7 +51,6 @@ Hardware characteristics for NVIDIA A100 (SXM4), H100 (SXM5), and the GB200 Supe
 
 - **NVIDIA Data Center Datasheets** (official FLOPs, TDP, memory bandwidth).
 - **MLPerf & TechBench Reports** (practical FLOPs/Watt efficiency).
-- **Academic Presentations** on GPU power draw curves (prefill vs decode utilization).
 
 ```yaml
 GPU_PROFILES:
