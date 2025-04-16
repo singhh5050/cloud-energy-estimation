@@ -17,7 +17,7 @@ These enhancements make the function both **user-friendly** and **energy-accurat
 
 ## 🎯 Model Estimation Methodology
 
-We reverse-engineered architecture parameters for OpenAI’s GPT-4o, o1, and o3-mini using a **principled approach**:
+We reverse-engineered architecture parameters for OpenAI's GPT-4o, o1, and o3-mini using a **principled approach**:
 
 1. **Public Benchmarks & Behavior**: Observing latency, throughput, cost-per-token, and context-window support in the OpenAI API.
 2. **Open-Source Analogs**: Mapping to models like Mixtral (22B MoE), LLaMA-2 (70B dense), and Mistral-7B for proxy sizing.
@@ -44,6 +44,8 @@ MODEL_PROFILES = {
     "reasoning_factor": 2.0
   }
 }
+```
+
 ## 💽 GPU Profile Sourcing
 
 Hardware characteristics for NVIDIA A100 (SXM4), H100 (SXM5), and the GB200 Superchip (Grace+Blackwell) were extracted from:
@@ -63,6 +65,7 @@ GPU_PROFILES:
   GB200:
     peak_flops: 2000e12
     power_rating: 1200
+```
 
 ## 🔢 Math Behind Nuanced Improvements
 
@@ -72,16 +75,17 @@ Rather than using a single average context, we model each decode token *i* as at
 
 **Quadratic attention scaling (used in standard attention):**
 
-$$
-\text{AttnFLOPs}_{\text{decode}} = 4 \cdot H \cdot d_{\text{head}} \cdot L \cdot \sum_{i=0}^{T_r - 1} (n_{\text{in}} + i) = 4 \cdot H \cdot d_{\text{head}} \cdot L \cdot \left[ n_{\text{in}} \cdot T_r + \frac{T_r (T_r - 1)}{2} \right]
-$$
+```
+AttnFLOPs_decode = 4 * H * d_head * L * sum_{i=0}^{T_r-1} (n_in + i)
+                 = 4 * H * d_head * L * [n_in * T_r + T_r(T_r-1)/2]
+```
 
 Where:
-- \( T_r \): total decode tokens, equal to visible output tokens × reasoning factor
-- \( n_{\text{in}} \): number of input tokens (prompt length)
-- \( H \): number of attention heads
-- \( d_{\text{head}} \): head dimension
-- \( L \): number of layers
+- T_r: total decode tokens, equal to visible output tokens × reasoning factor
+- n_in: number of input tokens (prompt length)
+- H: number of attention heads
+- d_head: head dimension
+- L: number of layers
 
 ---
 
@@ -93,9 +97,9 @@ You can toggle between two attention scaling modes:
 FLOPs grow quadratically with context length. Attention cost for prefill and decode:
 
 **Prefill:**
-$$
-\text{AttnFLOPs}_{\text{prefill}} = n_{\text{in}}^2 \cdot 4 \cdot H \cdot d_{\text{head}} \cdot L
-$$
+```
+AttnFLOPs_prefill = n_in^2 * 4 * H * d_head * L
+```
 
 **Decode:**
 Uses the dynamic context formula above.
@@ -104,16 +108,16 @@ Uses the dynamic context formula above.
 FLOPs grow linearly with the context length:
 
 **Prefill:**
-$$
-\text{AttnFLOPs}_{\text{prefill}} = n_{\text{in}} \cdot 4 \cdot H \cdot d_{\text{head}} \cdot L
-$$
+```
+AttnFLOPs_prefill = n_in * 4 * H * d_head * L
+```
 
 **Decode:**
-$$
-\text{AttnFLOPs}_{\text{decode}} = T_r \cdot \bar{n}_{\text{ctx}} \cdot 4 \cdot H \cdot d_{\text{head}} \cdot L
-$$
+```
+AttnFLOPs_decode = T_r * n_ctx_avg * 4 * H * d_head * L
+```
 
-Where \( \bar{n}_{\text{ctx}} \) is the average context length seen by the model across the decode tokens.
+Where `n_ctx_avg` is the average context length seen by the model across the decode tokens.
 
 ---
 
@@ -124,7 +128,7 @@ Use the `attention_mode` parameter in the function to toggle between these two r
 ## ▶️ How to Use
 
 ```python
-from energy_estimator import cloud_inference_energy_estimate_w_model_attributes
+from energy_tracking import cloud_inference_energy_estimate_w_model_attributes
 
 results = cloud_inference_energy_estimate_w_model_attributes(
     input_tokens=1024,
@@ -135,3 +139,4 @@ results = cloud_inference_energy_estimate_w_model_attributes(
 )
 
 print(results)
+```
