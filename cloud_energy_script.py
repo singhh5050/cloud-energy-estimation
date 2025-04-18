@@ -119,7 +119,7 @@ def cloud_inference_energy_estimate_w_model_attributes(
         * model_attr["flops_per_tkn_factor"]
         * model_attr["num_active_params"]
     )
-
+    
     if attention_mode == "quadratic":
         attn_prefill_flops = (
             (input_tokens ** 2)
@@ -128,7 +128,7 @@ def cloud_inference_energy_estimate_w_model_attributes(
             * model_attr["attn_head_dim"]
             * model_attr["num_layers"]
         )
-    else:
+    elif attention_mode == "linear":
         attn_prefill_flops = (
             input_tokens
             * model_attr["flops_per_tkn_factor_attn"]
@@ -136,9 +136,11 @@ def cloud_inference_energy_estimate_w_model_attributes(
             * model_attr["attn_head_dim"]
             * model_attr["num_layers"]
         )
-
+    else:
+        raise ValueError(f"Invalid attention_mode: {attention_mode}. Must be 'quadratic' or 'linear'.")
+    
     prefill_flops = dense_prefill_flops + attn_prefill_flops
-
+    
     # === Decode FLOPs ===
     if attention_mode == "quadratic":
         linear_term = input_tokens * total_decode_tokens
@@ -150,7 +152,17 @@ def cloud_inference_energy_estimate_w_model_attributes(
             * model_attr["attn_head_dim"]
             * model_attr["num_layers"]
         )
-    else:
+    elif attention_mode == "linear":
+        """
+        Estimate average context length per decode token (used in linear attention modeling).
+        FlashAttention still performs full quadratic attention — not a fixed window method —
+        but its memory-efficient implementation allows us to *approximate* its cost as linear.
+        This helps model autoregressive inference cost as:
+           FLOPs ≈ T_r × avg_context × 4 × H × d_head × L
+        where:
+           avg_context = input_tokens + (decode_tokens - 1) / 2
+        This reflects the growing context each token attends to, averaged over all steps.
+        """
         avg_context = input_tokens + (total_decode_tokens - 1) / 2
         decode_attn_flops = (
             total_decode_tokens
@@ -160,15 +172,17 @@ def cloud_inference_energy_estimate_w_model_attributes(
             * model_attr["attn_head_dim"]
             * model_attr["num_layers"]
         )
-
+    else:
+        raise ValueError(f"Invalid attention_mode: {attention_mode}. Must be 'quadratic' or 'linear'.")
+    
     decode_dense_flops = (
         total_decode_tokens
         * model_attr["flops_per_tkn_factor"]
         * model_attr["num_active_params"]
     )
-
+    
     decode_flops = decode_dense_flops + decode_attn_flops
-
+    
     # === Energy ===
     prefill_energy_joules = (
         prefill_flops
