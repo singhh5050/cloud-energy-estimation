@@ -11,115 +11,133 @@ This README outlines the design, rationale, and usage of the `cloud_inference_en
 3. **Attention Mode Toggle**: Switch between quadratic and linear (Flash) attention costs with `attention_mode`.
 4. **Dynamic Utilization Curve**: Models per-token decode cost growth as context length increases.
 
-These enhancements make the function both **user-friendly** and **energy-accurate** across different LLMs and hardware.
-
 ---
 
 ## 🎯 Model Estimation Methodology
 
-We reverse-engineered architecture parameters for OpenAI's GPT-4o, o1, and o3-mini using a **principled approach**:
+We reverse-engineered architecture parameters for OpenAI's GPT-4o, o1, and o3-mini using:
 
-1. **Public Benchmarks & Behavior**: Observing latency, throughput, cost-per-token, and context-window support in the OpenAI API.
-2. **Open-Source Analogs**: Mapping to models like Mixtral (22B MoE), LLaMA-2 (70B dense), and Mistral-7B for proxy sizing.
+- **Open-Source Analogs**: Mixtral (MoE 8×22B), LLaMA-2-70B, and Mistral-7B.
+- **Public Benchmarks**: Throughput, context length, and API behavior.
 
 ```python
 MODEL_PROFILES = {
-  "gpt-4o": {
-    "num_active_params": 44e9,  # 2 experts × 22B each active per token
-    "num_layers": 72,
-    "num_attn_heads": 96,
-    "attn_head_dim": 128,
-    "hidden_dim": 12288,
-    "reasoning_factor": 1.0
-  },
-  "o1": {
-    "num_active_params": 70e9,  # dense (LLaMA-2-70B proxy)
-    "num_layers": 80,
-    "reasoning_factor": 3.0
-  },
-  "o3-mini": {
-    "num_active_params": 7e9,   # Mistral-7B proxy
-    "num_layers": 32,
-    "reasoning_factor": 2.0
-  }
+    "gpt-4o": {
+        # Scaled from Mixtral-8x22B (per Epoch AI methodology)
+        "num_active_params": 100e9,
+        "num_layers": 77,
+        "num_attn_heads": 57,
+        "attn_head_dim": 150.1,
+        "hidden_dim": 8448.42,
+        "flops_per_tkn_factor": 2,
+        "flops_per_tkn_factor_attn": 4,
+        "reasoning_factor": 1.0,
+    },
+    "o1": {
+        # LLaMA-2-70B dense proxy
+        "num_active_params": 70e9,
+        "num_layers": 80,
+        "num_attn_heads": 64,
+        "attn_head_dim": 128,
+        "hidden_dim": 8192,
+        "flops_per_tkn_factor": 2,
+        "flops_per_tkn_factor_attn": 4,
+        "reasoning_factor": 3.0,
+    },
+    "o3-mini": {
+        # Mistral-7B dense proxy
+        "num_active_params": 7.3e9,
+        "num_layers": 32,
+        "num_attn_heads": 32,
+        "attn_head_dim": 128,
+        "hidden_dim": 4096,
+        "flops_per_tkn_factor": 2,
+        "flops_per_tkn_factor_attn": 4,
+        "reasoning_factor": 2.0,
+    }
 }
 ```
 
+---
+
 ## 💽 GPU Profile Sourcing
 
-Hardware characteristics for NVIDIA A100 (SXM4), H100 (SXM5), and the GB200 Superchip (Grace+Blackwell) were extracted from:
+Derived from official specs and energy measurement studies:
 
-- **NVIDIA Data Center Datasheets** (official FLOPs, TDP, memory bandwidth).
-- **MLPerf & TechBench Reports** (practical FLOPs/Watt efficiency).
+- **Datasheets**: FLOPs, TDP (NVIDIA A100, H100, GB200)
+- **Empirical Sources**: MLPerf, ASPLOS'24, Microsoft Research
 
-```yaml
-GPU_PROFILES:
-  A100:
-    peak_flops: 312e12
-    power_rating: 400
-  H100:
-    peak_flops: 989e12
-    power_rating: 700
-  GB200:
-    peak_flops: 2000e12
-    power_rating: 1200
+```python
+GPU_PROFILES = {
+    "A100": {
+        "peak_flops": 624e12,
+        "gpu_prefill_util": 0.5,
+        "gpu_decoding_util": 0.1,
+        "power_rating": 400,
+        "power_prefill_util": 1.0,
+        "power_decoding_util": 0.75,
+    },
+    "H100": {
+        "peak_flops": 989e12,
+        "gpu_prefill_util": 0.5,
+        "gpu_decoding_util": 0.1,
+        "power_rating": 700,
+        "power_prefill_util": 1.0,
+        "power_decoding_util": 0.75,
+    },
+    "GB200": {
+        "peak_flops": 10000e12,
+        "gpu_prefill_util": 0.5,
+        "gpu_decoding_util": 0.1,
+        "power_rating": 1200,
+        "power_prefill_util": 1.0,
+        "power_decoding_util": 0.75,
+    },
+}
 ```
+
+---
 
 ## 🔢 Math Behind Nuanced Improvements
 
 ### 1. Dynamic Utilization Curve
 
-Rather than using a single average context, we model each decode token *i* as attending to an expanding context of size `n_in + i`. This lets us account for the increasing attention cost across the autoregressive sequence.
+We model each decode token $i$ as attending to an expanding context of size $n_{\mathrm{in}} + i$.
 
-**Quadratic attention scaling (used in standard attention):**
-
-```
-AttnFLOPs_decode = 4 * H * d_head * L * sum_{i=0}^{T_r-1} (n_in + i)
-                 = 4 * H * d_head * L * [n_in * T_r + T_r(T_r-1)/2]
+```math
+\mathrm{AttnFLOPs}_{\mathrm{decode}} =
+4H\,d_{\mathrm{head}}\,L \sum_{i=0}^{T_r - 1}(n_{\mathrm{in}} + i)
+= 4H\,d_{\mathrm{head}}\,L \left[n_{\mathrm{in}}T_r + \frac{T_r(T_r - 1)}{2}\right]
 ```
 
 Where:
-- T_r: total decode tokens, equal to visible output tokens × reasoning factor
-- n_in: number of input tokens (prompt length)
-- H: number of attention heads
-- d_head: head dimension
-- L: number of layers
+- $T_r$: total decode tokens
+- $n_{\mathrm{in}}$: input tokens
+- $H$: attention heads
+- $d_{\mathrm{head}}$: head dimension
+- $L$: transformer layers
 
 ---
 
 ### 2. Flash (Linear) vs Quadratic Attention Toggle
 
-You can toggle between two attention scaling modes:
+#### Quadratic Attention
 
-#### 🔲 Quadratic Attention (Standard Transformers):
-FLOPs grow quadratically with context length. Attention cost for prefill and decode:
-
-**Prefill:**
-```
-AttnFLOPs_prefill = n_in^2 * 4 * H * d_head * L
+```math
+\mathrm{AttnFLOPs}_{\mathrm{prefill}} = n_{\mathrm{in}}^2 \cdot 4H\,d_{\mathrm{head}}\,L
 ```
 
-**Decode:**
-Uses the dynamic context formula above.
+#### Linear Attention (Flash, etc.)
 
-#### 🔲 Linear Attention (FlashAttention or Windowed Attention):
-FLOPs grow linearly with the context length:
-
-**Prefill:**
-```
-AttnFLOPs_prefill = n_in * 4 * H * d_head * L
+```math
+\mathrm{AttnFLOPs}_{\mathrm{prefill}} = n_{\mathrm{in}} \cdot 4H\,d_{\mathrm{head}}\,L
 ```
 
-**Decode:**
+```math
+\mathrm{AttnFLOPs}_{\mathrm{decode}} = T_r \cdot n_{\mathrm{ctx,avg}} \cdot 4H\,d_{\mathrm{head}}\,L
 ```
-AttnFLOPs_decode = T_r * n_ctx_avg * 4 * H * d_head * L
-```
 
-Where `n_ctx_avg` is the average context length seen by the model across the decode tokens.
-
----
-
-Use the `attention_mode` parameter in the function to toggle between these two regimes. This lets you model either memory-efficient attention architectures like FlashAttention or legacy transformer patterns depending on your target system.
+Where $n_{\mathrm{ctx,avg}}$ is the average context length per decode token.
 
 ---
 
@@ -131,8 +149,8 @@ from energy_tracking import cloud_inference_energy_estimate_w_model_attributes
 results = cloud_inference_energy_estimate_w_model_attributes(
     input_tokens=1024,
     output_tokens=256,
-    model_name="o1",           # Options: "gpt-4o", "o1", "o3-mini"
-    gpu_name="H100",           # Options: "A100", "H100", "GB200"
+    model_name="o1",           # "gpt-4o", "o1", "o3-mini"
+    gpu_name="H100",           # "A100", "H100", "GB200"
     attention_mode="quadratic" # or "linear"
 )
 
